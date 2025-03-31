@@ -15,9 +15,9 @@
 ```text
 1. 사용자로부터 SPL 토큰 주소 입력
     ↓
-2. [Birdeye] 해당 토큰 기준 최근 Signature 리스트 수집
+2. [Birdeye] 해당 토큰의 기본 정보 조회 (이름, 심볼, 가격 등)
     ↓
-3. [Helius] Signature별 트랜잭션 상세 조회
+3. [Helius] 해당 토큰의 트랜잭션 히스토리 조회
     ↓
 4. Swap 이벤트 필터링:
    - tokenIn == WSOL
@@ -29,7 +29,7 @@
    - 0~1 SOL
    - 1~5 SOL
    - 5~10 SOL
-   - 10 SOL 이상 (선택)
+   - 10 SOL 이상
     ↓
 7. 구간별:
    - 참여 지갑 수
@@ -44,19 +44,21 @@
 ### 3.1 토큰 주소 입력
 - 사용자로부터 SPL Token 주소 수동 입력 (웹 UI 또는 CLI)
 
-### 3.2 Birdeye 연동 (Signature 수집)
-- API: `/token/{address}/txs`
-- 입력한 토큰 기준 최근 트랜잭션 Signature 목록 확보
-- 시간 필터링 또는 최신 100~1000건 수집 가능
+### 3.2 Birdeye 연동 (토큰 정보 조회)
+- API: `/defi/token_overview`
+- 토큰의 기본 정보 조회:
+  - 이름, 심볼, 소수점 자릿수
+  - 현재 가격, 24시간 거래량, 시가총액
 
-### 3.3 Helius 연동 (Signature 분석)
-- API: `/v0/transactions/{signature}`
-- 각 Signature 별로 다음 항목 분석:
+### 3.3 Helius 연동 (트랜잭션 분석)
+- API: `/v0/transactions`
+- 각 트랜잭션에서 다음 항목 분석:
   - type == 'SWAP'
   - events.swap.tokenIn == WSOL
   - events.swap.tokenOut == 입력한 토큰
   - tokenTransfers[].fromUserAccount / signer
   - amountIn (SOL 기준 매수량)
+  - timestamp (정확한 시간 정보)
 
 ### 3.4 지갑별 SOL 매수량 집계 및 분류
 - 동일 지갑의 매수량 누적
@@ -78,7 +80,14 @@
 
 ```json
 {
-  "token": "SPL_TOKEN_ADDRESS",
+  "token": {
+    "address": "SPL_TOKEN_ADDRESS",
+    "name": "Token Name",
+    "symbol": "TKN",
+    "price": 1.23,
+    "volume_24h": 1000000,
+    "market_cap": 10000000
+  },
   "snapshot_time": "2025-03-24T11:00:00Z",
   "buyers_by_sol_range": {
     "0_1": {
@@ -107,8 +116,8 @@
 | 항목 | 기술 |
 |------|------|
 | 언어 | Python |
-| API 서버 | FastAPI (선택) |
-| 외부 API | Birdeye REST, Helius REST |
+| API 서버 | FastAPI |
+| 외부 API | Birdeye REST (토큰 정보), Helius REST (트랜잭션 분석) |
 | 데이터 저장 | MongoDB 또는 임시 메모리 분석 |
 | 분석 실행 | CLI or 주기적 실행 스크립트 |
 
@@ -118,13 +127,13 @@
 
 ```bash
 solana-token-analyzer/
-├── main.py                     # 실행 진입점 (CLI 또는 FastAPI)
+├── main.py                     # FastAPI 서버
 ├── config.py                   # 설정 파일 (API 키 등)
 ├── requirements.txt
 ├── app/
 │   ├── fetchers/
-│   │   ├── birdeye.py          # Birdeye Signature 수집 로직
-│   │   └── helius.py           # Helius 트랜잭션 분석 로직
+│   │   ├── birdeye.py          # Birdeye 토큰 정보 조회
+│   │   └── helius.py           # Helius 트랜잭션 분석
 │   ├── analyzers/
 │   │   └── buyer_classifier.py # 지갑별 매수량 집계 및 분류
 │   ├── utils/
@@ -145,5 +154,5 @@ solana-token-analyzer/
 
 ---
 
-**✅ 요약**: Birdeye → Signature 수집, Helius → 트랜잭션 상세 분석을 조합해, WSOL로 특정 SPL 토큰을 매수한 지갑들을 SOL 단위로 분류/집계하는 구조. 이 시스템을 통해 특정 토큰의 매수세 분포 및 주요 매수자 추적이 가능함.
+**✅ 요약**: Birdeye → 토큰 정보 조회, Helius → 트랜잭션 상세 분석을 조합해, WSOL로 특정 SPL 토큰을 매수한 지갑들을 SOL 단위로 분류/집계하는 구조. 이 시스템을 통해 특정 토큰의 매수세 분포 및 주요 매수자 추적이 가능함.
 

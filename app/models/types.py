@@ -32,13 +32,18 @@ class BuyerRange(BaseModel):
     total_sol: float
     transactions: List[Any]
 
+class SolRange(BaseModel):
+    count: int
+    total_sol: float
+    wallets: List[str]
+
 class BuyerAnalysis(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     token: str
-    snapshot_time: datetime
+    snapshot_time: str
     time_range: TimeRange
-    buyers_by_sol_range: Dict[str, BuyerRange]
+    buyers_by_sol_range: Dict[str, SolRange]
     wallet_summaries: Dict[str, WalletSummary]
     total_buy_volume: float
     total_sell_volume: float

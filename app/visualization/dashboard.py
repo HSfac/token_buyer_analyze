@@ -4,6 +4,8 @@ import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
 from app.models.types import BuyerAnalysis
+import pandas as pd
+from datetime import datetime
 
 def create_dashboard(analysis: BuyerAnalysis):
     app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -13,13 +15,68 @@ def create_dashboard(analysis: BuyerAnalysis):
     counts = [range_data.count for range_data in analysis.buyers_by_sol_range.values()]
     total_sols = [range_data.total_sol for range_data in analysis.buyers_by_sol_range.values()]
     
+    # CSV 데이터 준비
+    csv_data = []
+    
+    # 1. 토큰 정보
+    csv_data.append({
+        '분석 유형': '토큰 정보',
+        '토큰 주소': analysis.token,
+        '분석 시간': analysis.snapshot_time,
+        '시작 시간': analysis.time_range.start_time.isoformat(),
+        '종료 시간': analysis.time_range.end_time.isoformat(),
+        '총 매수자 수': sum(counts),
+        '총 매수량 (SOL)': sum(total_sols),
+        '총 매도량 (SOL)': analysis.total_sell_volume,
+        '순 매수량 (SOL)': analysis.net_buy_volume,
+        '고유 매수자 수': analysis.unique_buyers,
+        '고유 매도자 수': analysis.unique_sellers
+    })
+    
+    # 2. SOL 구간별 요약 정보
+    for range_key, range_data in analysis.buyers_by_sol_range.items():
+        csv_data.append({
+            '분석 유형': 'SOL 구간 요약',
+            'SOL 구간': range_key,
+            '매수자 수': range_data.count,
+            '총 매수량 (SOL)': range_data.total_sol,
+            '평균 매수량 (SOL)': range_data.total_sol / range_data.count if range_data.count > 0 else 0,
+            '지갑 주소': '',
+            '개별 매수량 (SOL)': ''
+        })
+    
+    # 3. 개별 지갑 상세 정보
+    for range_key, range_data in analysis.buyers_by_sol_range.items():
+        for wallet in range_data.wallets:
+            # 지갑별 상세 정보 가져오기
+            wallet_summary = analysis.wallet_summaries.get(wallet, {})
+            
+            csv_data.append({
+                '분석 유형': '지갑 상세',
+                'SOL 구간': range_key,
+                '지갑 주소': wallet,
+                '개별 매수량 (SOL)': range_data.total_sol / len(range_data.wallets) if range_data.wallets else 0,
+                '총 매수량 (SOL)': '',
+                '매수자 수': '',
+                '평균 매수량 (SOL)': '',
+                '시작 시간': '',
+                '종료 시간': '',
+                '총 매수자 수': '',
+                '총 매도량 (SOL)': '',
+                '순 매수량 (SOL)': '',
+                '고유 매수자 수': '',
+                '고유 매도자 수': ''
+            })
+    
+    df = pd.DataFrame(csv_data)
+    csv_string = df.to_csv(index=False)
+    
     # 매수자 수 분포 차트
     fig_counts = px.bar(
         x=ranges,
         y=counts,
         title='SOL 구간별 매수자 수',
         labels={'x': 'SOL 구간', 'y': '매수자 수'},
-        color=ranges,
         color_discrete_sequence=px.colors.qualitative.Set3
     )
     
@@ -29,7 +86,6 @@ def create_dashboard(analysis: BuyerAnalysis):
         y=total_sols,
         title='SOL 구간별 총 매수량',
         labels={'x': 'SOL 구간', 'y': '총 매수량 (SOL)'},
-        color=ranges,
         color_discrete_sequence=px.colors.qualitative.Set3
     )
     
@@ -66,7 +122,14 @@ def create_dashboard(analysis: BuyerAnalysis):
                 html.P(f'토큰 주소: {analysis.token}'),
                 html.P(f'분석 시간: {analysis.snapshot_time}'),
                 html.P(f'총 매수자 수: {sum(counts)}'),
-                html.P(f'총 매수량: {sum(total_sols):.2f} SOL')
+                html.P(f'총 매수량: {sum(total_sols):.2f} SOL'),
+                html.A(
+                    'CSV 다운로드',
+                    id='download-link',
+                    download=f'token_analysis_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
+                    href=f'data:text/csv;charset=utf-8,{csv_string}',
+                    className='btn btn-success mb-3'
+                )
             ], width=12, className='mb-4')
         ]),
         

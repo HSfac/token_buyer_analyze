@@ -1,149 +1,187 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
-from fastapi import Request
-from typing import Optional
+from fastapi.responses import JSONResponse, HTMLResponse
 from datetime import datetime, timedelta
-import asyncio
-from app.fetchers.birdeye import BirdeyeFetcher
+import pytz
+from typing import Optional, Dict, Any
+import logging
 from app.fetchers.helius import HeliusFetcher
 from app.analyzers.buyer_classifier import BuyerClassifier
-from app.models.types import BuyerAnalysis, TokenInfo, TimeRange
+from app.config import BIRDEYE_API_KEY, HELIUS_API_KEY
 from app.visualization.dashboard import create_dashboard
-import uvicorn
+from app.models.types import BuyerAnalysis, SolRange, TimeRange
+import asyncio
+import threading
+import webbrowser
+import os
 
-app = FastAPI(title="Solana Token Buyer Analyzer")
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# CORS 설정
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# 템플릿과 정적 파일 설정
+app = FastAPI()
 templates = Jinja2Templates(directory="app/templates")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# API 클라이언트 초기화
+helius_client = HeliusFetcher(HELIUS_API_KEY)
+buyer_classifier = BuyerClassifier()
+
+# 분석 결과를 저장할 전역 변수
+analysis_cache = {}
+current_analysis = None  # 현재 분석 결과를 저장할 변수 추가
+dashboard_server = None  # 대시보드 서버 인스턴스를 저장할 변수
+
+def run_dashboard():
+    """대시보드 서버를 실행합니다."""
+    if current_analysis is None:
+        raise ValueError("분석 결과가 없습니다.")
+    
+    # 대시보드 앱 생성
+    dashboard_app = create_dashboard(analysis=current_analysis)
+    
+    # 새로운 스레드에서 대시보드 서버 실행
+    def run_server():
+        dashboard_app.run_server(host="127.0.0.1", port=8050, debug=False)
+    
+    # 이전 대시보드 서버가 있다면 종료
+    global dashboard_server
+    if dashboard_server and dashboard_server.is_alive():
+        dashboard_server.join(timeout=1)
+    
+    # 새로운 대시보드 서버 시작
+    dashboard_server = threading.Thread(target=run_server)
+    dashboard_server.daemon = True  # 메인 프로그램 종료 시 함께 종료
+    dashboard_server.start()
+    
+    logger.info("대시보드 서버가 시작되었습니다.")
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    """
-    메인 대시보드 페이지를 표시합니다.
-    """
+async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/analyze/{token_address}", response_model=BuyerAnalysis)
-async def analyze_token_buyers(
+@app.get("/analyze/{token_address}")
+async def analyze_token(
     token_address: str,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-    interval_seconds: Optional[int] = 30,
-    limit: Optional[int] = 100
-) -> BuyerAnalysis:
-    """
-    특정 토큰의 매수자 분석을 수행합니다.
-    
-    Args:
-        token_address: 분석할 토큰의 주소
-        start_time: 분석 시작 시간 (기본값: 현재 시간 - 24시간)
-        end_time: 분석 종료 시간 (기본값: 현재 시간)
-        interval_seconds: 분석 간격 (초 단위, 기본값: 30초)
-        limit: 가져올 최대 트랜잭션 수 (기본값: 100)
-    """
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    limit: int = 100
+):
     try:
-        # 시간 범위 설정
-        if end_time is None:
-            end_time = datetime.utcnow()
-        if start_time is None:
-            start_time = end_time - timedelta(days=1)
-        
-        time_range = TimeRange(
+        # 시간 파라미터 처리
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                start_time = start_dt.isoformat()
+            except (ValueError, AttributeError):
+                raise HTTPException(status_code=400, detail="잘못된 시작 시간 형식")
+                
+        if end_time:
+            try:
+                end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                end_time = end_dt.isoformat()
+            except (ValueError, AttributeError):
+                raise HTTPException(status_code=400, detail="잘못된 종료 시간 형식")
+                
+        # 트랜잭션 데이터 수집
+        transactions = await helius_client.get_token_transactions(
+            token_address=token_address,
             start_time=start_time,
             end_time=end_time,
-            interval_seconds=interval_seconds
+            limit=limit
         )
         
-        # Birdeye에서 트랜잭션 시그니처 수집
-        birdeye = BirdeyeFetcher()
-        signatures = await birdeye.get_token_transactions(token_address, limit)
-        
-        # Helius에서 트랜잭션 상세 정보 수집
-        helius = HeliusFetcher()
-        transactions = []
-        
-        for signature in signatures:
-            tx = await helius.get_transaction_details(signature, token_address)
-            if tx:
-                transactions.append(tx)
-        
-        # 매수자 분류 및 분석
+        # 매수자 분류
         classifier = BuyerClassifier()
-        analysis = classifier.classify_buyers(transactions, token_address, time_range)
+        analysis_dict = classifier.classify_buyers(transactions)
         
-        return analysis
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/token/{token_address}", response_model=TokenInfo)
-async def get_token_info(token_address: str) -> TokenInfo:
-    """
-    토큰의 기본 정보를 조회합니다.
-    """
-    try:
-        birdeye = BirdeyeFetcher()
-        token_info = await birdeye.get_token_info(token_address)
-        return TokenInfo(**token_info)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/visualize/{token_address}", response_class=HTMLResponse)
-async def visualize_analysis(
-    token_address: str,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-    interval_seconds: Optional[int] = 30,
-    limit: Optional[int] = 100
-):
-    """
-    토큰 매수자 분석 결과를 시각화합니다.
-    """
-    try:
-        # 분석 수행
-        analysis = await analyze_token_buyers(
-            token_address,
-            start_time,
-            end_time,
-            interval_seconds,
-            limit
+        # BuyerAnalysis 객체 생성
+        analysis_result = BuyerAnalysis(
+            token=token_address,
+            snapshot_time=datetime.now(pytz.UTC).isoformat(),
+            time_range=TimeRange(
+                start_time=datetime.fromisoformat(start_time) if start_time else datetime.now(pytz.UTC) - timedelta(days=1),
+                end_time=datetime.fromisoformat(end_time) if end_time else datetime.now(pytz.UTC),
+                interval_seconds=30  # 기본값으로 30초 설정
+            ),
+            buyers_by_sol_range={
+                range_key: SolRange(
+                    count=range_data["count"],
+                    total_sol=range_data["total_sol"],
+                    wallets=range_data["wallets"]
+                )
+                for range_key, range_data in analysis_dict["buyers_by_sol_range"].items()
+            },
+            wallet_summaries={},
+            total_buy_volume=sum(range_data["total_sol"] for range_data in analysis_dict["buyers_by_sol_range"].values()),
+            total_sell_volume=0,
+            net_buy_volume=sum(range_data["total_sol"] for range_data in analysis_dict["buyers_by_sol_range"].values()),
+            unique_buyers=sum(range_data["count"] for range_data in analysis_dict["buyers_by_sol_range"].values()),
+            unique_sellers=0
         )
         
-        # 대시보드 생성
-        dashboard = create_dashboard(analysis)
+        # 결과를 캐시에 저장
+        cache_key = f"{token_address}_{start_time}_{end_time}_{limit}"
+        analysis_cache[cache_key] = analysis_result
+        global current_analysis
+        current_analysis = analysis_result
         
-        # 대시보드 실행
-        dashboard.run_server(debug=False, port=8050)
+        logger.info(f"분석 결과 캐시 저장 완료: {cache_key}")
+        return analysis_result
         
-        return f"""
-        <html>
-            <head>
-                <title>토큰 매수자 분석 대시보드</title>
-            </head>
-            <body>
-                <h1>토큰 매수자 분석 대시보드</h1>
-                <p>대시보드가 새 탭에서 열립니다...</p>
-                <script>
-                    window.open('http://localhost:8050', '_blank');
-                </script>
-            </body>
-        </html>
-        """
     except Exception as e:
+        logger.error(f"토큰 분석 중 에러 발생: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/visualize/{token_address}")
+async def visualize_token(
+    token_address: str,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    limit: int = 100
+):
+    try:
+        # 시간 파라미터 처리
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                start_time = start_dt.isoformat()
+            except (ValueError, AttributeError):
+                raise HTTPException(status_code=400, detail="잘못된 시작 시간 형식")
+                
+        if end_time:
+            try:
+                end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                end_time = end_dt.isoformat()
+            except (ValueError, AttributeError):
+                raise HTTPException(status_code=400, detail="잘못된 종료 시간 형식")
+        
+        # 캐시 키 생성
+        cache_key = f"{token_address}_{start_time}_{end_time}_{limit}"
+        logger.info(f"시각화 요청 - 캐시 키: {cache_key}")
+        
+        # 캐시된 분석 결과가 있는지 확인
+        if cache_key not in analysis_cache:
+            logger.error(f"캐시된 결과 없음: {cache_key}")
+            raise HTTPException(status_code=400, detail="먼저 분석을 실행해주세요.")
+            
+        # 캐시된 분석 결과 사용
+        analysis_result = analysis_cache[cache_key]
+        global current_analysis
+        current_analysis = analysis_result
+        
+        logger.info("대시보드 서버 시작")
+        # 대시보드 서버 실행
+        run_dashboard()
+        
+        return JSONResponse({"status": "success", "message": "대시보드가 생성되었습니다."})
+        
+    except HTTPException as e:
+        logger.error(f"시각화 중 HTTP 에러 발생: {str(e)}")
+        raise e
+    except Exception as e:
+        logger.error(f"시각화 중 에러 발생: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 
