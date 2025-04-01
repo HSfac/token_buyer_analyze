@@ -14,32 +14,20 @@ mkdir token_buyer_analyze
 cd token_buyer_analyze
 
 # GitHub에서 프로젝트 클론
-git clone https://github.com/your-username/token_buyer_analyze.git .
+git clone https://github.com/HSfac/token_buyer_analyze.git .
 ```
 
-### 2.2 가상환경 설정
-```bash
-# 가상환경 생성
-python -m venv venv
+### 2.2 의존성 설치
 
-# 가상환경 활성화
-# Windows의 경우:
-venv\Scripts\activate
-# Mac/Linux의 경우:
-source venv/bin/activate
-```
-
-### 2.3 의존성 설치
-```bash
 pip install -r requirements.txt
-```
 
-### 2.4 환경 변수 설정
+
+### 2.3 환경 변수 설정
 1. 프로젝트 루트 디렉토리에 `.env` 파일 생성
 2. 다음 내용을 `.env` 파일에 추가:
 ```env
-# API 키 설정
-BIRDEYE_API_KEY=your_birdeye_api_key_here
+# API 키 설정 디코
+BIRDEYE_API_KEY=your_birdeye_api_key_here 
 HELIUS_API_KEY=your_helius_api_key_here
 
 # MongoDB 설정 (선택사항)
@@ -50,15 +38,13 @@ DATABASE_NAME=token_analyzer
 ## 3. 실행 방법
 
 ### 3.1 서버 실행
-```bash
-# FastAPI 서버 실행
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
+ 터미널에서
+ "python main.py" 명령어 실행
 
 ### 3.2 대시보드 접속
 1. 웹 브라우저에서 `http://localhost:8000` 접속
 2. 토큰 주소 입력
-3. 분석 기간 설정 (선택사항)
+3. 분석 기간 설정 (선택사항,아직 트잭 최신순으로 들고오는 로직으로 구현함.)
 4. "분석 시작" 버튼 클릭
 
 ### 3.3 CSV 데이터 다운로드
@@ -71,14 +57,13 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ## 4. 데이터 분석 결과
 
 ### 4.1 CSV 파일 구조
-1. 토큰 정보 섹션
+1. 토큰 정보 섹션, buyer 위주로 분석해둠.
    - 토큰 주소
    - 분석 시간
    - 시작/종료 시간
    - 총 매수자 수
-   - 총 매수량/매도량
-   - 순 매수량
-   - 고유 매수자/매도자 수
+   - 총 매수량
+   - 지갑 분석,
 
 2. SOL 구간별 요약 정보
    - SOL 구간
@@ -116,7 +101,6 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 ### 6.1 서버가 실행되지 않는 경우
 - Python 버전이 3.8 이상인지 확인
-- 가상환경이 활성화되어 있는지 확인
 - 필요한 패키지가 모두 설치되어 있는지 확인
 
 ### 6.2 API 호출 실패 시
