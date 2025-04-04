@@ -57,7 +57,7 @@
                             
                             <div class="mb-3">
                                 <label for="limit" class="form-label">분석할 트랜잭션 수 (최대 10000)</label>
-                                <input type="number" class="form-control" id="limit" value="100" min="1" max="10000">
+                                <input type="number" class="form-control" id="limit" value="500" min="1" max="10000">
                             </div>
                             
                             <button type="submit" class="btn btn-primary">분석 시작</button>
@@ -69,6 +69,12 @@
 
         <div id="result" class="mt-4"></div>
         <div id="logContainer" class="log-container" style="display: none;"></div>
+        <div id="progressContainer" class="mt-3" style="display: none;">
+            <div class="progress">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+            </div>
+            <div id="progressText" class="text-center mt-2">데이터 로딩 중...</div>
+        </div>
     </div>
 
     <script>
@@ -104,8 +110,25 @@
             logContainer.innerHTML = '';
             logContainer.style.display = 'block';
             
+            // 프로그래스 바 초기화 및 표시
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = '데이터 로딩 중...';
+            
             try {
                 addLog('분석을 시작합니다...', 'info');
+                
+                // 프로그래스 업데이트 함수
+                let progress = 0;
+                let progressInterval = setInterval(() => {
+                    if (progress < 95) {
+                        progress += (95 - progress) * 0.05;
+                        progressBar.style.width = `${progress}%`;
+                    }
+                }, 500);
                 
                 // 분석 시작
                 const response = await fetch(
@@ -115,14 +138,40 @@
                     `limit=${limit}`
                 );
                 
+                // 프로그래스 업데이트 중지
+                clearInterval(progressInterval);
+                
                 if (!response.ok) {
+                    progressBar.classList.remove('bg-primary');
+                    progressBar.classList.add('bg-danger');
+                    progressText.textContent = '에러 발생';
                     throw new Error(await response.text());
                 }
+                
+                // 완료 표시
+                progressBar.style.width = '100%';
+                progressBar.classList.remove('progress-bar-animated');
+                progressText.textContent = '분석 완료!';
                 
                 const data = await response.json();
                 lastAnalysisResult = data;
                 
                 addLog('분석이 완료되었습니다!', 'success');
+                
+                // 분석 결과 요약 정보 로그에 추가
+                addLog(`총 구매자 수: ${data.unique_buyers}명`, 'info');
+                addLog(`총 구매 금액: ${data.total_buy_volume.toFixed(2)} SOL`, 'info');
+                
+                if (data.buyers_by_sol_range) {
+                    const ranges = Object.keys(data.buyers_by_sol_range);
+                    if (ranges.length > 0) {
+                        addLog('구매자 분포:', 'info');
+                        ranges.forEach(range => {
+                            const rangeData = data.buyers_by_sol_range[range];
+                            addLog(`  ${range}: ${rangeData.count}명 (${rangeData.total_sol.toFixed(2)} SOL)`, 'info');
+                        });
+                    }
+                }
                 
                 // 결과 표시
                 const resultDiv = document.getElementById('result');
@@ -147,6 +196,20 @@
             try {
                 addLog('시각화를 생성합니다...', 'info');
                 
+                // 시각화 생성 요청 - 서버 로그를 수신하기 위한 EventSource 사용
+                const evtSource = new EventSource(`/log-stream`);
+                
+                // 로그 이벤트 처리
+                evtSource.onmessage = (event) => {
+                    const logData = JSON.parse(event.data);
+                    if (logData.message && logData.message.startsWith('[시각화 로그]')) {
+                        // 시각화 로그 메시지 추출 및 표시
+                        const message = logData.message.replace('[시각화 로그]', '').trim();
+                        addLog(message, logData.type || 'info');
+                    }
+                };
+                
+                // 시각화 요청
                 const response = await fetch(
                     `/visualize/${tokenAddress}?` +
                     `start_time=${new Date(startTime).toISOString()}&` +
@@ -155,11 +218,30 @@
                 );
                 
                 if (!response.ok) {
-                    throw new Error(await response.text());
+                    evtSource.close();
+                    const errorText = await response.text();
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        throw new Error(errorJson.detail || errorText);
+                    } catch (e) {
+                        throw new Error(errorText);
+                    }
                 }
                 
+                // 응답 처리
+                const data = await response.json();
+                
+                // 시각화가 성공적으로 생성되면 EventSource 종료
+                evtSource.close();
+                
                 addLog('시각화가 생성되었습니다. 새 탭에서 열립니다...', 'success');
-                window.open('http://127.0.0.1:8050', '_blank');
+                
+                // 대시보드 URL이 포함된 경우 새 탭에서 열기
+                if (data && data.dashboard_url) {
+                    window.open(data.dashboard_url, '_blank');
+                } else {
+                    window.open('http://127.0.0.1:8050', '_blank');
+                }
             } catch (error) {
                 addLog(`시각화 생성 중 오류 발생: ${error.message}`, 'error');
                 document.getElementById('result').innerHTML += `

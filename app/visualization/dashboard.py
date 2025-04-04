@@ -1,14 +1,22 @@
 import dash
-from dash import html, dcc
+from dash import html, dcc, Output, Input
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
 from app.models.types import BuyerAnalysis
 import pandas as pd
 from datetime import datetime
+from urllib.parse import parse_qsl
+import logging
+
+logger = logging.getLogger(__name__)
 
 def create_dashboard(analysis: BuyerAnalysis):
     app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+    
+    # 캐시 비활성화
+    app.config.suppress_callback_exceptions = True
+    app.server.config['CACHE_TYPE'] = 'null'
     
     # 데이터 준비
     ranges = list(analysis.buyers_by_sol_range.keys())
@@ -115,6 +123,7 @@ def create_dashboard(analysis: BuyerAnalysis):
     # 대시보드 레이아웃
     app.layout = dbc.Container([
         html.H1('토큰 매수자 분석 대시보드', className='text-center my-4'),
+        html.Div(id='timestamp-hidden', children=str(datetime.now().timestamp()), style={'display': 'none'}),
         
         dbc.Row([
             dbc.Col([
@@ -129,7 +138,8 @@ def create_dashboard(analysis: BuyerAnalysis):
                     download=f'token_analysis_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
                     href=f'data:text/csv;charset=utf-8,{csv_string}',
                     className='btn btn-success mb-3'
-                )
+                ),
+                html.Button('데이터 갱신', id='refresh-button', className='btn btn-primary ml-2 mb-3')
             ], width=12, className='mb-4')
         ]),
         
@@ -155,5 +165,32 @@ def create_dashboard(analysis: BuyerAnalysis):
             ], width=12)
         ])
     ], fluid=True)
+    
+    @app.callback(
+        Output('timestamp-hidden', 'children'),
+        Input('refresh-button', 'n_clicks'),
+        prevent_initial_call=True
+    )
+    def refresh_data(n_clicks):
+        """데이터 갱신 버튼 클릭 시 호출"""
+        if n_clicks:
+            logger.info("대시보드 데이터 갱신 버튼 클릭됨")
+            # 타임스탬프 업데이트로 전체 페이지 새로고침 유도
+            return str(datetime.now().timestamp())
+        return dash.no_update
+    
+    @app.callback(
+        Output('download-link', 'href'),
+        Input('timestamp-hidden', 'children'),
+        prevent_initial_call=True
+    )
+    def update_download_link(timestamp):
+        """타임스탬프 변경 시 다운로드 링크 업데이트"""
+        if timestamp:
+            logger.info("다운로드 링크 업데이트")
+            # 새로운 파일명 생성
+            new_filename = f'token_analysis_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            return f'data:text/csv;charset=utf-8,{csv_string}'
+        return dash.no_update
     
     return app 
